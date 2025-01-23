@@ -30,7 +30,6 @@ REDIS_URL=redis://localhost:6379
 
 ### 4. Database Setup
 ```bash
-
 # Seed sample data
 npm run db:seed
 ```
@@ -54,6 +53,18 @@ npm run start:prod
     - `isAvailable` (optional): Product availability
     - `page` (optional): Result page number
     - `pageSize` (optional): Results per page
+
+- `GET /api-docs`
+  - Access Swagger documentation
+
+### Example Keywords
+- **Electronics**
+- **Clothing**
+- **Home & Garden**
+- **Books**
+- **Sports**
+- **Toys**
+- **Beauty**
 
 ## Performance Notes
 - Cached queries: <200ms response
