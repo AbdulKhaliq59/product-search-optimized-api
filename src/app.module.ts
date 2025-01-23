@@ -7,8 +7,6 @@ import { databaseConfig } from './config/database.config';
 import { CacheModule } from '@nestjs/cache-manager';
 import { ProductsModule } from './products/products.module';
 
-console.log("Database config", databaseConfig);
-
 @Module({
   imports: [
     ConfigModule.forRoot({
