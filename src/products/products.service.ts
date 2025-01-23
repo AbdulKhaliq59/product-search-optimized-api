@@ -43,11 +43,11 @@ export class ProductsService {
             const [items, total] = await query.getManyAndCount();
 
             const result = {
-                items,
-                total,
                 page,
                 pageSize,
                 totalPages: Math.ceil(total / pageSize),
+                total,
+                items,
             };
 
             await this.redisClient.set(
