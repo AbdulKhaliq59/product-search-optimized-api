@@ -1,87 +1,120 @@
-import { Inject, Injectable } from "@nestjs/common";
+import { Inject, Injectable, Logger } from "@nestjs/common";
 import { InjectRepository } from "@nestjs/typeorm";
 import { Product } from "./entities/product.entity";
-import { Repository, Between, Like } from "typeorm";
-import { CACHE_MANAGER } from '@nestjs/cache-manager'
+import { Repository } from "typeorm";
 import { SearchProductDto } from "./dto/search-product.dto";
-import { Cache } from "cache-manager";
+import { Redis } from "ioredis";
 
 @Injectable()
 export class ProductsService {
+    private readonly logger = new Logger(ProductsService.name);
+
     constructor(
         @InjectRepository(Product)
         private productsRepository: Repository<Product>,
-        @Inject(CACHE_MANAGER)
-        private cacheManager: Cache,
+        @Inject('REDIS_CLIENT')
+        private readonly redisClient: Redis,
     ) { }
 
     async searchProducts(searchDto: SearchProductDto) {
+        const startTime = Date.now();
         const page = Number(searchDto.page) || 1;
         const pageSize = Number(searchDto.pageSize) || 10;
-        const cachedKey = this.generateCacheKey(searchDto);
-        const cachedResult = await this.cacheManager.get(cachedKey);
+        const cacheKey = this.generateCacheKey(searchDto);
 
-        console.log("Cached data", cachedResult);
 
-        if (cachedResult) {
-            return cachedResult;
+        try {
+            const cachedResult = await this.redisClient.get(cacheKey);
+            if (cachedResult) {
+                const parsedResult = JSON.parse(cachedResult);
+                this.logPerformance(startTime, true);
+                return parsedResult;
+            }
+
+            const query = this.productsRepository.createQueryBuilder('product');
+
+            this.applyFilters(query, searchDto);
+
+            query
+                .orderBy('product.price', 'ASC')
+                .skip((page - 1) * pageSize)
+                .take(pageSize);
+
+            const [items, total] = await query.getManyAndCount();
+
+            const result = {
+                items,
+                total,
+                page,
+                pageSize,
+                totalPages: Math.ceil(total / pageSize),
+            };
+
+            await this.redisClient.set(
+                cacheKey,
+                JSON.stringify(result),
+                'EX',
+                300 //5min 
+            );
+            this.logPerformance(startTime, false);
+            return result;
+        } catch (error) {
+            this.logger.error('Search failed', error);
+            throw error;
         }
+    }
 
-        const query = this.productsRepository.createQueryBuilder('product');
-
-        // Corrected query: Group the OR condition for keyword
+    private applyFilters(query: any, searchDto: SearchProductDto) {
         if (searchDto.keyword) {
             query.where('(product.name ILIKE :keyword OR product.description ILIKE :keyword)', {
                 keyword: `%${searchDto.keyword}%`,
             });
         }
 
-        // Apply price range filter
         if (searchDto.minPrice !== undefined && searchDto.maxPrice !== undefined) {
             const minPrice = Number(searchDto.minPrice);
             const maxPrice = Number(searchDto.maxPrice);
 
             if (!isNaN(minPrice) && !isNaN(maxPrice)) {
-                console.log("MinPrice & MaxPrice", minPrice, maxPrice);
                 query.andWhere('product.price BETWEEN :minPrice AND :maxPrice', {
                     minPrice,
                     maxPrice,
                 });
             } else {
-                console.error("Invalid price range values:", searchDto.minPrice, searchDto.maxPrice);
+                this.logger.warn("Invalid price range values");
             }
         }
 
-        // Apply availability filter
         if (searchDto.isAvailable !== undefined) {
-            console.log("isAvailable filter", searchDto.isAvailable);
             query.andWhere('product.isAvailable = :isAvailable', {
                 isAvailable: searchDto.isAvailable,
             });
         }
-        console.log("Query", query.getQuery());
-
-        query
-            .orderBy('product.price', 'ASC')
-            .skip((page - 1) * pageSize)
-            .take(pageSize);
-
-        const [items, total] = await query.getManyAndCount();
-
-        const result = {
-            items,
-            total,
-            page,
-            pageSize,
-            totalPages: Math.ceil(total / pageSize),
-        };
-
-        await this.cacheManager.set(cachedKey, result, 300000); // 5 minutes
-        return result;
     }
 
-
     private generateCacheKey(searchDto: SearchProductDto): string {
-        return `products_search_${JSON.stringify(searchDto)}`;
+        const key = JSON.stringify({
+            keyword: searchDto.keyword,
+            minPrice: searchDto.minPrice,
+            maxPrice: searchDto.maxPrice,
+            isAvailable: searchDto.isAvailable,
+            page: searchDto.page,
+            pageSize: searchDto.pageSize,
+        });
+        return `product_search: ${key}`;
+    }
+
+    private logPerformance(startTime: number, isCached: boolean) {
+        const duration = Date.now() - startTime;
+        this.logger.log({
+            type: isCached ? 'cache_hit' : 'database_query',
+            duration,
+            isCached
+        })
+    }
+
+    async invalidateCache(searchDto: SearchProductDto) {
+        const cacheKey = this.generateCacheKey(searchDto);
+        await this.redisClient.del(cacheKey);
     }
 }
